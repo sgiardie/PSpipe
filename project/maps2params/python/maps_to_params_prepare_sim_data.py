@@ -9,19 +9,20 @@ Finally it generates a binning_file for SO with format : bin_min, bin_max, bin_m
 
 The code makes use of the SO noise calculator: so_noise_calculator_public_20180822.
 """
+import os
+import sys
+from copy import deepcopy
+from itertools import combinations_with_replacement as cwr
+
+import numpy as np
+import pylab as plt
+from cobaya.install import install
+from cobaya.model import get_model
 #import matplotlib
 #matplotlib.use("Agg")
 from pspy import pspy_utils, so_dict
-import numpy as np
-import pylab as plt
-from itertools import combinations_with_replacement as cwr
-import os
-import sys
-import so_noise_calculator_public_20180822 as noise_calc
-from copy import deepcopy
 
-from cobaya.install import install
-from cobaya.model import get_model
+import so_noise_calculator_public_20180822 as noise_calc
 
 d = so_dict.so_dict()
 d.read_from_file(sys.argv[1])
@@ -218,39 +219,33 @@ plt.close()
 
 # We now compare the signal power spectra with foreground power spectra
 
-import mflike as mfl
-
 experiments = d["experiments"]
 
 fg_norm = d["fg_norm"]
 fg_components = d["fg_components"]
-fg_model =  {"normalisation":  fg_norm, "components": fg_components}
-fg_params =  d["fg_params"]
+fg_model = {"normalisation":  fg_norm, "components": fg_components}
+fg_params = d["fg_params"]
 nuisance_params = d["nuisance_params"]
 
 band_integration = d["band_integration"]
 
-all_freqs = [float(freq) for exp in experiments for freq in d["freqs_%s" % exp]]
+all_freqs = np.array([int(freq) for exp in experiments for freq in d[f"freqs_{exp}"]])
 nfreqs = len(all_freqs)
 
-mflike_config = {
-    "mflike.MFLike": {
-        "band_integration": band_integration,
-        "standalone": True,
-        "foregrounds": fg_model
-        }}
+from mflike import theoryforge_MFLike as th_mflike
 
-info = {
-    "params": {**fg_params, **nuisance_params},
-    "likelihood": mflike_config}
+ThFo = th_mflike.TheoryForge_MFLike()
+ThFo.freqs = all_freqs
 
-model = get_model(info)
-mflike = model.likelihood["mflike.MFLike"]
-ThFo = mflike.ThFo
-ThFo.freqs = [int(f) for f in all_freqs]
+ThFo.bandint_nsteps = band_integration["nsteps"]
+ThFo.bandint_width = band_integration["bandwidth"]
+ThFo.bandint_external_bandpass = band_integration["external_bandpass"]
 ThFo.bandint_freqs = ThFo._bandpass_construction(**nuisance_params)
 
-fg_dict = ThFo._get_foreground_model(ell = ell, **fg_params)
+ThFo.foregrounds = fg_model
+ThFo._init_foreground_model()
+
+fg_dict = ThFo._get_foreground_model(ell=ell, **fg_params)
 
 # Plot separated components for tSZ and CIB
 fg_components["tt"].remove("tSZ_and_CIB")
@@ -262,7 +257,6 @@ for mode in ["tt", "te", "ee"]:
     from itertools import product
     for i, cross in enumerate(product(all_freqs, all_freqs)):
         f0, f1 = cross
-        f0, f1 = int(f0), int(f1)
         idx = (i%nfreqs, i//nfreqs)
         ax = axes[idx]
         if idx in zip(*np.triu_indices(nfreqs, k=1)) and mode != "te":
